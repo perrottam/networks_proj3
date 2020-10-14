@@ -153,7 +153,15 @@ class Router:
 
     def update(self, srcif, packet):
         """	handle update packets	"""
-        # TODO
+        # (1) Save a copy of the announcement
+        self.updates.append(packet)
+        print(self.updates)
+        # (2) Add an entry to the forwarding table
+        msg = copy.deepcopy(packet)[MESG]
+        msg.update({"peer_ip": packet[SRCE]})
+        self.routes.append(msg)
+        print(self.routes)
+        # (3) Forward update message to neighbors
         self.pervade_update(srcif, packet)
         return True
 
