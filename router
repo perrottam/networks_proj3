@@ -147,6 +147,8 @@ class Router:
         for sock in other_neighbors:
             to_send[SRCE] = sock[:-1] + "1"
             to_send[DEST] = sock
+            if DEBUG:
+                print("Sending update:\n", to_send)
             serialized = json.dumps(to_send)
             self.sockets[sock].sendall(serialized.encode(
                 encoding='ascii', errors='strict'))
@@ -155,12 +157,10 @@ class Router:
         """	handle update packets	"""
         # (1) Save a copy of the announcement
         self.updates.append(packet)
-        print(self.updates)
         # (2) Add an entry to the forwarding table
         msg = copy.deepcopy(packet)[MESG]
-        msg.update({"peer_ip": packet[SRCE]})
+        msg.update({"peer_id": packet[SRCE]})
         self.routes.append(msg)
-        print(self.routes)
         # (3) Forward update message to neighbors
         self.pervade_update(srcif, packet)
         return True
@@ -172,7 +172,24 @@ class Router:
 
     def dump(self, packet):
         """	handles dump table requests	"""
-        # TODO
+        msg = []
+        for route in self.routes:
+            msg.append({
+                "network" : route["network"], 
+                "netmask" : route["netmask"], 
+                "peer" : route["peer_id"]
+            })
+        to_send = {
+            "src": packet[DEST],
+            "dst": packet[SRCE],
+            "type": "table",
+            "msg": msg,
+        }
+        if DEBUG:
+            print("Sending dump:\n", to_send)
+        serialized = json.dumps(to_send)
+        self.sockets[packet[SRCE]].sendall(serialized.encode(
+            encoding='ascii', errors='strict'))
         return True
 
     def handle_packet(self, srcif, packet):
@@ -208,7 +225,8 @@ class Router:
                         if self.sockets[sock] == conn:
                             srcif = sock
                     msg = json.loads(k)
-                    print("Msg: ", msg)
+                    if DEBUG:
+                        print("Received message:\n", msg)
                     if not self.handle_packet(srcif, msg):
                         self.send_error(conn, msg)
                 else:
