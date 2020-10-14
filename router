@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 
-import argparse, socket, time, json, select, struct, math
+import argparse
+import socket
+import time
+import json
+import select
+import struct
+import math
+import copy
 
-#DEBUG = True
-DEBUG = False
+DEBUG = True
+# DEBUG = False
 
 parser = argparse.ArgumentParser(description='route packets')
 parser.add_argument('asn', type=int, help="AS Number")
-parser.add_argument('networks', metavar='networks', type=str, nargs='+', help="networks")
+parser.add_argument('networks', metavar='networks',
+                    type=str, nargs='+', help="networks")
 args = parser.parse_args()
 
 ##########################################################################################
@@ -56,9 +64,10 @@ class Router:
         self.sockets = {}
         for relationship in networks:
             network, relation = relationship.split("-")
-            if DEBUG: 
+            if DEBUG:
                 print("Starting socket for", network, relation)
-            self.sockets[network] = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            self.sockets[network] = socket.socket(
+                socket.AF_UNIX, socket.SOCK_SEQPACKET)
             self.sockets[network].setblocking(0)
             self.sockets[network].connect(network)
             self.relations[network] = relation
@@ -75,13 +84,13 @@ class Router:
         # TODO
         outroutes = []
         return outroutes
-            
+
     def get_highest_preference(self, routes):
         """ select the route with the shortest AS Path """
         # TODO
         outroutes = []
         return outroutes
-         
+
     def get_self_origin(self, routes):
         """ select self originating routes """
         # TODO
@@ -103,7 +112,7 @@ class Router:
         """	Select the best route for a given address	"""
         # TODO
         peer = None
-        routes = lookup_routers(daddr)
+        routes = lookup_routes(daddr)
         # Rules go here
         if routes:
             # 1. Highest Preference
@@ -130,11 +139,24 @@ class Router:
         # TODO (this is the most difficult task, save until last)
         return False
 
+    def pervade_update(self, srcif, packet):
+        """ handle spreading update """
+        other_neighbors = list(filter(lambda x: x != srcif, self.sockets))
+        to_send = copy.deepcopy(packet)
+        to_send[MESG][APTH].append(args.asn)
+        for sock in other_neighbors:
+            to_send[SRCE] = sock[:-1] + "1"
+            to_send[DEST] = sock
+            serialized = json.dumps(to_send)
+            self.sockets[sock].sendall(serialized.encode(
+                encoding='ascii', errors='strict'))
+
     def update(self, srcif, packet):
         """	handle update packets	"""
-        # TODO 
-        return False
-    
+        # TODO
+        self.pervade_update(srcif, packet)
+        return True
+
     def revoke(self, packet):
         """	handle revoke packets	"""
         # TODO
@@ -148,7 +170,16 @@ class Router:
     def handle_packet(self, srcif, packet):
         """	dispatches a packet """
         # TODO
-        return False
+        packet_type = packet[TYPE]
+        if (packet_type == UPDT):
+            return self.update(srcif, packet)
+        elif (packet_type == DATA):
+            print("handling data")
+            return True
+        elif (packet_type == DUMP):
+            return self.dump(packet)
+        else:
+            raise ValueError("Invalid packet type")
 
     def send_error(self, conn, msg):
         """ Send a no_route error message """
@@ -169,11 +200,13 @@ class Router:
                         if self.sockets[sock] == conn:
                             srcif = sock
                     msg = json.loads(k)
+                    print("Msg: ", msg)
                     if not self.handle_packet(srcif, msg):
                         self.send_error(conn, msg)
                 else:
                     return
         return
+
 
 if __name__ == "__main__":
     router = Router(args.networks)
