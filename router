@@ -8,9 +8,10 @@ import select
 import struct
 import math
 import copy
+import ipaddress
 
-DEBUG = True
-# DEBUG = False
+# DEBUG = True
+DEBUG = False
 
 parser = argparse.ArgumentParser(description='route packets')
 parser.add_argument('asn', type=int, help="AS Number")
@@ -79,35 +80,85 @@ class Router:
         for r in self.routes:
             network = r[NTWK].split('.')[0]
             dest = daddr.split('.')[0]
-
             if network == dest:
-                route = r['peer_id']
-                outroutes.append(route)
-
+                outroutes.append(r)
         return outroutes
 
     def get_shortest_as_path(self, routes):
         """ select the route with the shortest AS Path """
-        # TODO
         outroutes = []
+        shortest = -1
+        for route in routes:
+            cur = len(route[APTH])
+            if shortest == -1 or cur == shortest:
+                shortest = cur
+                outroutes.append(route)
+            elif cur < shortest:
+                shortest = cur
+                outroutes = []
+                outroutes.append(route)
+        if DEBUG:
+            print("Minimized potential routes to shortest paths:")
+            print(outroutes)
         return outroutes
 
     def get_highest_preference(self, routes):
-        """ select the route with the shortest AS Path """
-        # TODO
+        """ select the route with the highest preference """
         outroutes = []
+        highest = -1
+        for route in routes:
+            cur = route[LPRF]
+            if highest == -1 or cur == highest:
+                highest = cur
+                outroutes.append(route)
+            elif cur > highest:
+                highest = cur
+                outroutes = []
+                outroutes.append(route)
+        if DEBUG:
+            print("Minimized potential routes to highest preference:")
+            print(outroutes)
         return outroutes
 
     def get_self_origin(self, routes):
         """ select self originating routes """
-        # TODO
         outroutes = []
+        for route in routes:
+            if route[SORG]:
+                outroutes.append(route)
+        if not outroutes:
+            outroutes = routes
+        if DEBUG:
+            print("Minimized potential routes to self originating (if any):")
+            print(outroutes)
         return outroutes
 
     def get_origin_routes(self, routes):
         """ select origin routes: EGP > IGP > UNK """
-        # TODO
+        egp_routes = []
+        igp_routes = []
+        unk_routes = []
+
+        for route in routes:
+            if route[ORIG] == "EGP":
+                egp_routes.append(route)
+            elif route[ORIG] == "IGP":
+                igp_routes.append(route)
+            elif route[ORIG] == "UNK":
+                unk_routes.append(route)
+
         outroutes = []
+        if len(igp_routes) != 0:
+            outroutes = igp_routes
+        elif len(egp_routes) != 0:
+            outroutes = egp_routes
+        else:
+            outroutes = unk_routes
+
+        if DEBUG:
+            print("Minimized potential routes by origin:")
+            print(outroutes)
+
         return outroutes
 
     def filter_relationships(self, srcif, routes):
@@ -115,11 +166,28 @@ class Router:
         outroutes = []
         return outroutes
 
+    def lowest_ip_address_routes(self, routes):
+        """ Selec the route with the lowest IP address """
+        outroutes = []
+        lowest = ""
+        for route in routes:
+            if not lowest or ipaddress.ip_address(lowest) > ipaddress.ip_address(route[PEER]):
+                lowest = route[PEER]
+                outroutes = []
+                outroutes.append(route)
+            elif ipaddress.ip_address(lowest) == ipaddress.ip_address(route[PEER]):
+                outroutes.append(route)
+
+        if DEBUG:
+            print("Minimized potential routes by lowest ip:")
+            print(outroutes)
+
+        return outroutes
+
     def get_route(self, srcif, daddr):
         """	Select the best route for a given address	"""
-        # TODO
         peer = None
-        routes = lookup_routes(daddr)
+        routes = self.lookup_routes(daddr)
         # Rules go here
         if routes:
             # 1. Highest Preference
@@ -131,11 +199,12 @@ class Router:
             # 4. EGP > IGP > UNK
             routes = self.get_origin_routes(routes)
             # 5. Lowest IP Address
-            # TODO
+            routes = self.lowest_ip_address_routes(routes)
             # Final check: enforce peering relationships
-            routes = self.filter_relationships(srcif, routes)
+            # routes = self.filter_relationships(srcif, routes)
+        if len(routes) >= 1:
+            peer = routes[0][PEER]
         return self.sockets[peer] if peer else None
-
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
@@ -144,28 +213,34 @@ class Router:
 
         if len(routes) == 0:
             # router does not have a route to the given destination, send back
-            to_send = {
-                "src": packet[SRCE],
-                "dst": packet[DEST],
-                "type": "no route",
-                "msg": {},
-            }
-
-            serialized = json.dumps(to_send)
-            self.sockets[packet[SRCE]].sendall(serialized.encode(
-            encoding='ascii', errors='strict'))
-
+            self.no_route_send_back(packet)
         elif len(routes) == 1:
             # forward the data packet on the appropriate port
-            sock = routes[0]
+            sock = routes[0][PEER]
 
             serialized = json.dumps(packet)
             self.sockets[sock].sendall(serialized.encode(
                 encoding='ascii', errors='strict'))
-
         else:
-            print('Handle multiple routes')
+            sock = self.get_route(srcif, dest)
+            if not sock:
+                self.no_route_send_back(packet)
 
+            serialized = json.dumps(packet)
+            sock.sendall(serialized.encode(
+                encoding='ascii', errors='strict'))
+
+    def no_route_send_back(self, packet):
+        to_send = {
+            "src": packet[SRCE],
+            "dst": packet[DEST],
+            "type": "no route",
+            "msg": {},
+        }
+
+        serialized = json.dumps(to_send)
+        self.sockets[packet[SRCE]].sendall(serialized.encode(
+            encoding='ascii', errors='strict'))
 
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
@@ -192,7 +267,7 @@ class Router:
         self.updates.append(packet)
         # (2) Add an entry to the forwarding table
         msg = copy.deepcopy(packet)[MESG]
-        msg.update({"peer_id": packet[SRCE]})
+        msg.update({"peer": packet[SRCE]})
         self.routes.append(msg)
         # (3) Forward update message to neighbors
         self.pervade_update(srcif, packet)
@@ -208,9 +283,9 @@ class Router:
         msg = []
         for route in self.routes:
             msg.append({
-                "network" : route["network"], 
-                "netmask" : route["netmask"], 
-                "peer" : route["peer_id"]
+                "network": route["network"],
+                "netmask": route["netmask"],
+                "peer": route[PEER]
             })
         to_send = {
             "src": packet[DEST],
@@ -232,7 +307,6 @@ class Router:
         if (packet_type == UPDT):
             return self.update(srcif, packet)
         elif (packet_type == DATA):
-            print("handling data")
             return self.forward(srcif, packet)
         elif (packet_type == DUMP):
             return self.dump(packet)
