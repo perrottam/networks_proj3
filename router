@@ -8,7 +8,6 @@ import select
 import struct
 import math
 import copy
-import ipaddress
 
 # DEBUG = True
 DEBUG = False
@@ -171,11 +170,13 @@ class Router:
         outroutes = []
         lowest = ""
         for route in routes:
-            if not lowest or ipaddress.ip_address(lowest) > ipaddress.ip_address(route[PEER]):
+            l = lowest.split('.')[0]
+            p = route[PEER].split('.')[0]
+            if not lowest or l > p:
                 lowest = route[PEER]
                 outroutes = []
                 outroutes.append(route)
-            elif ipaddress.ip_address(lowest) == ipaddress.ip_address(route[PEER]):
+            elif l == p:
                 outroutes.append(route)
 
         if DEBUG:
