@@ -9,7 +9,7 @@ import struct
 import math
 import copy
 
-# DEBUG = True
+#DEBUG = True
 DEBUG = False
 
 parser = argparse.ArgumentParser(description='route packets')
@@ -163,6 +163,11 @@ class Router:
     def filter_relationships(self, srcif, routes):
         """ Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards """
         outroutes = []
+        if DEBUG:
+            print('Relations: ' + self.relations)
+        for r in routes:
+            if self.relations[srcif] == CUST or self.relations[r[PEER]] == CUST:
+                outroutes.append(r)
         return outroutes
 
     def lowest_ip_address_routes(self, routes):
@@ -202,7 +207,7 @@ class Router:
             # 5. Lowest IP Address
             routes = self.lowest_ip_address_routes(routes)
             # Final check: enforce peering relationships
-            # routes = self.filter_relationships(srcif, routes)
+            routes = self.filter_relationships(srcif, routes)
         if len(routes) >= 1:
             peer = routes[0][PEER]
         return self.sockets[peer] if peer else None
@@ -246,21 +251,24 @@ class Router:
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
         # TODO (this is the most difficult task, save until last)
-        return False
+        return False   
 
     def pervade_update(self, srcif, packet):
         """ handle spreading update """
         other_neighbors = list(filter(lambda x: x != srcif, self.sockets))
         to_send = copy.deepcopy(packet)
-        to_send[MESG][APTH].append(args.asn)
+        if packet[TYPE] == UPDT:
+            to_send[MESG][APTH].append(args.asn)
         for sock in other_neighbors:
-            to_send[SRCE] = sock[:-1] + "1"
-            to_send[DEST] = sock
-            if DEBUG:
-                print("Sending update:\n", to_send)
-            serialized = json.dumps(to_send)
-            self.sockets[sock].sendall(serialized.encode(
-                encoding='ascii', errors='strict'))
+            #if self.relations[srcif] == CUST or self.relations[sock] == CUST:
+                #print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
+                #print('-----------------------')
+                to_send[SRCE] = sock[:-1] + "1"
+                to_send[DEST] = sock
+                if DEBUG:
+                    print("Sending update:\n", to_send)
+                serialized = json.dumps(to_send)
+                self.sockets[sock].sendall(serialized.encode(encoding='ascii', errors='strict'))
 
     def update(self, srcif, packet):
         """	handle update packets	"""
@@ -274,10 +282,22 @@ class Router:
         self.pervade_update(srcif, packet)
         return True
 
-    def revoke(self, packet):
-        """	handle revoke packets	"""
-        # TODO
-        return True
+    def revoke(self, srcif, packet):
+        """ handle revoke packets   """
+        # Save copy of revoke announcement for later
+        self.updates.append(packet)
+        # Remove dead entries from revoke in routing table
+        newRoutes = []
+        for r in packet[MESG]:
+            for route in self.routes:
+                if (route["network"] != r["network"] or route["netmask"] != r["netmask"] or route["peer"] != packet[SRCE]):
+                    newRoutes.append(route)
+        
+        self.routes = copy.deepcopy(newRoutes)
+        #self.coalesce() for disaggregation
+        self.pervade_update(srcif, packet)
+        return True   
+
 
     def dump(self, packet):
         """	handles dump table requests	"""
@@ -311,6 +331,8 @@ class Router:
             return self.forward(srcif, packet)
         elif (packet_type == DUMP):
             return self.dump(packet)
+        elif (packet_type == RVKE):
+            return self.revoke(srcif, packet)
         else:
             raise ValueError("Invalid packet type")
 
