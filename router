@@ -98,10 +98,6 @@ class Router:
         outroutes = []
         longest_mask_length = None
         for r in self.coalesced_routes:
-            # network = r[NTWK].split('.')[0]
-            # dest = daddr.split('.')[0]
-            # if network == dest:
-            #     outroutes.append(r)
             if (self.ip_to_bin(daddr) ^ self.ip_to_bin(r[NTWK])) & self.ip_to_bin(r[NMSK]) == 0:
                 cur_mask_length = self.get_mask_length(r[NMSK])
                 if longest_mask_length is None or cur_mask_length > longest_mask_length:
@@ -211,18 +207,15 @@ class Router:
                 outroutes.append(route)
             elif l == p:
                 outroutes.append(route)
-
         if DEBUG:
             print("Minimized potential routes by lowest ip:")
             print(outroutes)
-
         return outroutes
 
     def get_route(self, srcif, daddr):
         """	Select the best route for a given address	"""
         peer = None
         routes = self.lookup_routes(daddr)
-        # Rules go here
         if routes:
             # 1. Highest Preference
             routes = self.get_highest_preference(routes)
@@ -258,6 +251,7 @@ class Router:
             else:
                 self.no_route_send_back(packet)
         else:
+            # multiple routes, use routing logic
             sock = self.get_route(srcif, dest)
             if not sock:
                 self.no_route_send_back(packet)
@@ -267,6 +261,7 @@ class Router:
                 encoding='ascii', errors='strict'))
 
     def no_route_send_back(self, packet):
+        """	Send No Route message back to sender when no route found """
         to_send = {
             "dst": packet[SRCE],
             "type": "no route",
@@ -355,9 +350,6 @@ class Router:
         if packet[TYPE] == UPDT:
             to_send[MESG][APTH].append(args.asn)
         for sock in other_neighbors:
-            # if self.relations[srcif] == CUST or self.relations[sock] == CUST:
-            # print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
-            # print('-----------------------')
             to_send[SRCE] = sock[:-1] + "1"
             to_send[DEST] = sock
             if self.relations[sock] == CUST or self.relations[srcif] == CUST:
@@ -392,7 +384,7 @@ class Router:
                     newRoutes.append(route)
 
         self.routes = copy.deepcopy(newRoutes)
-        self.coalesce()
+        self.coalesce() # disaggregation
         self.pervade_update(srcif, packet)
         return True
 
@@ -434,7 +426,6 @@ class Router:
 
     def send_error(self, conn, msg):
         """ Send a no_route error message """
-        # TODO
         return
 
     def run(self):
