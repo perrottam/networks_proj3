@@ -9,7 +9,7 @@ import struct
 import math
 import copy
 
-#DEBUG = True
+# DEBUG = True
 DEBUG = False
 
 parser = argparse.ArgumentParser(description='route packets')
@@ -73,13 +73,22 @@ class Router:
             self.relations[network] = relation
         return
 
+    def ip_to_bin(self, ip):
+        """ Convert String ip address to binary int """
+        parts = ip.split(".")
+        int_parts = list(map(int, parts))
+        binary = '{0:08b}{1:08b}{2:08b}{3:08b}'.format(*int_parts)
+        return int(binary, 2)
+
     def lookup_routes(self, daddr):
         """ Lookup all valid routes for an address """
         outroutes = []
         for r in self.routes:
-            network = r[NTWK].split('.')[0]
-            dest = daddr.split('.')[0]
-            if network == dest:
+            # network = r[NTWK].split('.')[0]
+            # dest = daddr.split('.')[0]
+            # if network == dest:
+            #     outroutes.append(r)
+            if (self.ip_to_bin(daddr) ^ self.ip_to_bin(r[NTWK])) & self.ip_to_bin(r[NMSK]) == 0:
                 outroutes.append(r)
         return outroutes
 
@@ -251,7 +260,7 @@ class Router:
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
         # TODO (this is the most difficult task, save until last)
-        return False   
+        return False
 
     def pervade_update(self, srcif, packet):
         """ handle spreading update """
@@ -260,15 +269,16 @@ class Router:
         if packet[TYPE] == UPDT:
             to_send[MESG][APTH].append(args.asn)
         for sock in other_neighbors:
-            #if self.relations[srcif] == CUST or self.relations[sock] == CUST:
-                #print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
-                #print('-----------------------')
-                to_send[SRCE] = sock[:-1] + "1"
-                to_send[DEST] = sock
-                if DEBUG:
-                    print("Sending update:\n", to_send)
-                serialized = json.dumps(to_send)
-                self.sockets[sock].sendall(serialized.encode(encoding='ascii', errors='strict'))
+            # if self.relations[srcif] == CUST or self.relations[sock] == CUST:
+            #print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
+            # print('-----------------------')
+            to_send[SRCE] = sock[:-1] + "1"
+            to_send[DEST] = sock
+            if DEBUG:
+                print("Sending update:\n", to_send)
+            serialized = json.dumps(to_send)
+            self.sockets[sock].sendall(serialized.encode(
+                encoding='ascii', errors='strict'))
 
     def update(self, srcif, packet):
         """	handle update packets	"""
@@ -292,12 +302,11 @@ class Router:
             for route in self.routes:
                 if (route["network"] != r["network"] or route["netmask"] != r["netmask"] or route["peer"] != packet[SRCE]):
                     newRoutes.append(route)
-        
-        self.routes = copy.deepcopy(newRoutes)
-        #self.coalesce() for disaggregation
-        self.pervade_update(srcif, packet)
-        return True   
 
+        self.routes = copy.deepcopy(newRoutes)
+        # self.coalesce() for disaggregation
+        self.pervade_update(srcif, packet)
+        return True
 
     def dump(self, packet):
         """	handles dump table requests	"""
