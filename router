@@ -53,12 +53,14 @@ PROV = "prov"
 class Router:
 
     routes = None
+    coalesced_routes = None
     updates = None
     relations = None
     sockets = None
 
     def __init__(self, networks):
         self.routes = []
+        self.coalesced_routes = []
         self.updates = []
         self.relations = {}
         self.sockets = {}
@@ -95,7 +97,7 @@ class Router:
         """ Only returns matches that have the longest matching netmask """
         outroutes = []
         longest_mask_length = None
-        for r in self.routes:
+        for r in self.coalesced_routes:
             # network = r[NTWK].split('.')[0]
             # dest = daddr.split('.')[0]
             # if network == dest:
@@ -274,10 +276,74 @@ class Router:
         self.sockets[packet[SRCE]].sendall(serialized.encode(
             encoding='ascii', errors='strict'))
 
+    def equal_route_fields(self, route_a, route_b):
+        """ determine if two routes are equal and candidates for aggregation """
+        return route_a[PEER] == route_b[PEER] and route_a[LPRF] == route_b[LPRF] and route_a[NMSK] == route_b[NMSK] and route_a[APTH] == route_b[APTH] and route_a[ORIG] == route_b[ORIG] and route_a[SORG] == route_b[SORG]
+
+    def is_neighbors(self, route_a, route_b):
+        """ determine if two routes are neighbors and candidates for aggregation """
+        mask_length_a = self.get_mask_length(route_a[NMSK])
+        mask_length_b = self.get_mask_length(route_b[NMSK])
+        # Expect network dif to be a single "1" at mask_length - 1
+        net_dif = self.ip_to_bin(
+            route_a[NTWK]) ^ self.ip_to_bin(route_b[NTWK])
+        net_string = '{0:32b}'.format(net_dif)
+        return mask_length_a == mask_length_b and net_string.index("1") == mask_length_a - 1 and net_string.rfind("1") == mask_length_a - 1
+
+    def shorten_mask(self, mask):
+        """ take the string netmask and return the string netmask shortened by 1 in length """
+        new_mask = []
+        parts = mask.split(".")
+        altered = False
+        for part in reversed(parts):
+            if part != "0" and not altered:
+                binary = '{0:08b}'.format(int(part))
+                last_one_index = binary.rfind("1")
+                new_binary = binary[:last_one_index] + \
+                    "0" + binary[last_one_index + 1:]
+                new_part = str(int(new_binary, 2))
+                new_mask.insert(0, new_part)
+                altered = True
+            else:
+                new_mask.insert(0, part)
+
+        return ".".join(new_mask)
+
+    def join_routes(self, route_a, route_b):
+        """ aggregate two routes into a single route """
+        ret = {
+            LPRF: route_a[LPRF],
+            APTH: route_a[LPRF],
+            ORIG: route_a[ORIG],
+            SORG: route_a[SORG],
+            PEER: route_a[PEER]
+        }
+        # take the lesser of the networks
+        net_a = self.ip_to_bin(route_a[NTWK])
+        net_b = self.ip_to_bin(route_b[NTWK])
+        ret[NTWK] = route_a[NTWK] if net_a < net_b else route_b[NTWK]
+        # take the netmask with length - 1
+        ret[NMSK] = self.shorten_mask(route_a[NMSK])
+        return ret
+
+    def coalesce_helper(self, routes):
+        """ recursive coalesce function """
+        coalesced_routes = []
+        for i in range(len(routes) - 1):
+            for j in range(i + 1, len(routes)):
+                if self.equal_route_fields(routes[i], routes[j]) and self.is_neighbors(routes[i], routes[j]):
+                    coalesced_routes.append(
+                        self.join_routes(routes[i], routes[j]))
+                    if j < len(routes):
+                        coalesced_routes.extend(routes[j + 1:len(routes)])
+                    return self.coalesce_helper(coalesced_routes)
+            coalesced_routes.append(routes[i])
+        return routes
+
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
-        # TODO (this is the most difficult task, save until last)
-        return False
+        self.coalesced_routes = self.coalesce_helper(self.routes)
+        return True
 
     def pervade_update(self, srcif, packet):
         """ handle spreading update """
@@ -287,7 +353,7 @@ class Router:
             to_send[MESG][APTH].append(args.asn)
         for sock in other_neighbors:
             # if self.relations[srcif] == CUST or self.relations[sock] == CUST:
-            #print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
+            # print('Sending from ' + srcif + ', ' + self.relations[srcif] + ' -> ' + sock + ', ' + self.relations[sock])
             # print('-----------------------')
             to_send[SRCE] = sock[:-1] + "1"
             to_send[DEST] = sock
@@ -305,6 +371,7 @@ class Router:
         msg = copy.deepcopy(packet)[MESG]
         msg.update({"peer": packet[SRCE]})
         self.routes.append(msg)
+        self.coalesce()
         # (3) Forward update message to neighbors
         self.pervade_update(srcif, packet)
         return True
@@ -321,14 +388,14 @@ class Router:
                     newRoutes.append(route)
 
         self.routes = copy.deepcopy(newRoutes)
-        # self.coalesce() for disaggregation
+        self.coalesce()
         self.pervade_update(srcif, packet)
         return True
 
     def dump(self, packet):
         """	handles dump table requests	"""
         msg = []
-        for route in self.routes:
+        for route in self.coalesced_routes:
             msg.append({
                 "network": route["network"],
                 "netmask": route["netmask"],
