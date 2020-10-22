@@ -251,10 +251,12 @@ class Router:
         elif len(routes) == 1:
             # forward the data packet on the appropriate port
             sock = routes[0][PEER]
-
-            serialized = json.dumps(packet)
-            self.sockets[sock].sendall(serialized.encode(
-                encoding='ascii', errors='strict'))
+            if self.relations[srcif] == CUST or self.relations[sock] == CUST:
+                serialized = json.dumps(packet)
+                self.sockets[sock].sendall(serialized.encode(
+                    encoding='ascii', errors='strict'))
+            else:
+                self.no_route_send_back(packet)
         else:
             sock = self.get_route(srcif, dest)
             if not sock:
@@ -266,14 +268,15 @@ class Router:
 
     def no_route_send_back(self, packet):
         to_send = {
-            "src": packet[SRCE],
-            "dst": packet[DEST],
+            "dst": packet[SRCE],
             "type": "no route",
             "msg": {},
         }
+        sock = self.lookup_routes(packet[SRCE])[0][PEER]
+        to_send[SRCE] = sock[:-1] + "1"
 
         serialized = json.dumps(to_send)
-        self.sockets[packet[SRCE]].sendall(serialized.encode(
+        self.sockets[sock].sendall(serialized.encode(
             encoding='ascii', errors='strict'))
 
     def equal_route_fields(self, route_a, route_b):
@@ -357,11 +360,12 @@ class Router:
             # print('-----------------------')
             to_send[SRCE] = sock[:-1] + "1"
             to_send[DEST] = sock
-            if DEBUG:
-                print("Sending update:\n", to_send)
-            serialized = json.dumps(to_send)
-            self.sockets[sock].sendall(serialized.encode(
-                encoding='ascii', errors='strict'))
+            if self.relations[sock] == CUST or self.relations[srcif] == CUST:
+                if DEBUG:
+                    print("Sending update:\n", to_send)
+                serialized = json.dumps(to_send)
+                self.sockets[sock].sendall(serialized.encode(
+                    encoding='ascii', errors='strict'))
 
     def update(self, srcif, packet):
         """	handle update packets	"""
@@ -416,7 +420,6 @@ class Router:
 
     def handle_packet(self, srcif, packet):
         """	dispatches a packet """
-        # TODO
         packet_type = packet[TYPE]
         if (packet_type == UPDT):
             return self.update(srcif, packet)
